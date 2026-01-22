@@ -74,7 +74,7 @@ impl WgslGenerator {
                 self.emit_expression(target, &new_p)
             }
             SdfOp::Color { target, color } => {
-                let mut res = self.emit_expression(target, p_var);
+                let res = self.emit_expression(target, p_var);
                 // We wrap the expression and just replace the color field
                 format!("set_color({}, vec3<f32>({:.4}, {:.4}, {:.4}))", res, color[0], color[1], color[2])
             }

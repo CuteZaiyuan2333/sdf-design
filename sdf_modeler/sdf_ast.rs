@@ -9,6 +9,7 @@ pub enum SdfOp {
     
     Union { a: Box<SdfNode>, b: Box<SdfNode>, smooth: f32 },
     Subtract { a: Box<SdfNode>, b: Box<SdfNode>, smooth: f32 },
+    #[allow(dead_code)]
     Intersect { a: Box<SdfNode>, b: Box<SdfNode>, smooth: f32 },
     
     Translate { target: Box<SdfNode>, offset: [f32; 3] },
@@ -33,6 +34,7 @@ impl SdfNode {
     pub fn union(&mut self, other: SdfNode) -> SdfNode { Self { op: SdfOp::Union { a: Box::new(self.clone()), b: Box::new(other), smooth: 0.0 } } }
     pub fn smooth_union(&mut self, other: SdfNode, k: f32) -> SdfNode { Self { op: SdfOp::Union { a: Box::new(self.clone()), b: Box::new(other), smooth: k } } }
     pub fn subtract(&mut self, other: SdfNode) -> SdfNode { Self { op: SdfOp::Subtract { a: Box::new(self.clone()), b: Box::new(other), smooth: 0.0 } } }
+    #[allow(dead_code)]
     pub fn smooth_subtract(&mut self, other: SdfNode, k: f32) -> SdfNode { Self { op: SdfOp::Subtract { a: Box::new(self.clone()), b: Box::new(other), smooth: k } } }
     
     pub fn translate(&mut self, x: f32, y: f32, z: f32) -> SdfNode { Self { op: SdfOp::Translate { target: Box::new(self.clone()), offset: [x, y, z] } } }

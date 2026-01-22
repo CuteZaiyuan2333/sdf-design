@@ -20,7 +20,6 @@ pub struct SdfRenderResources {
     pub pipeline: wgpu::RenderPipeline,
     pub bind_group: wgpu::BindGroup,
     pub uniform_buffer: wgpu::Buffer,
-    pub start_time: std::time::Instant,
 }
 
 impl SdfRenderResources {
@@ -107,7 +106,6 @@ impl SdfRenderResources {
             pipeline,
             bind_group,
             uniform_buffer,
-            start_time: std::time::Instant::now(),
         })
     }
 }
