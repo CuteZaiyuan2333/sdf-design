@@ -1,0 +1,13 @@
+[plugin]
+name = "sdf_modeler"
+display_name = "SDF Modeler"
+version = "0.1.0"
+author = "Sdf Design"
+description = "A Real-time SDF Modeler powered by Rhai and WGSL."
+dependencies = ["core"]
+
+[external_dependencies]
+rhai = { version = "1.24", features = ["f32_float", "sync"] }
+glam = { version = "0.29", features = ["bytemuck"] }
+bytemuck = { version = "1.19", features = ["derive"] }
+parking_lot = "0.12"
