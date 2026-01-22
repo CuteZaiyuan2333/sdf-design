@@ -28,8 +28,6 @@ fn rotate_y(p: vec3<f32>, angle: f32) -> vec3<f32> {
     return vec3<f32>(c * p.x + s * p.z, p.y, -s * p.x + c * p.z);
 }
 
-// --- Scene ---
-
 fn map(p_in: vec3<f32>) -> f32 {
     let p = rotate_y(p_in, uniforms.time_data.x * 0.8);
     let sphere_dist = sd_sphere(p - vec3<f32>(0.0, 0.4, 0.0), 0.6);
@@ -48,13 +46,39 @@ fn calc_normal(p: vec3<f32>) -> vec3<f32> {
 
 fn ray_march(ro: vec3<f32>, rd: vec3<f32>) -> f32 {
     var t = 0.0;
-    for (var i = 0; i < 80; i++) {
+    for (var i = 0; i < 100; i++) {
         let p = ro + rd * t;
         let d = map(p);
         if (d < 0.001 || t > 20.0) { break; }
         t += d;
     }
     return t;
+}
+
+fn render_scene(uv: vec2<f32>) -> vec3<f32> {
+    let ro = vec3<f32>(0.0, 0.0, 3.5);
+    let rd = normalize(vec3<f32>(uv, -1.8));
+
+    let t = ray_march(ro, rd);
+
+    if (t > 20.0) {
+        return vec3<f32>(0.08, 0.08, 0.1);
+    }
+
+    let p = ro + rd * t;
+    let normal = calc_normal(p);
+    
+    let light_pos = vec3<f32>(2.0, 4.0, 3.0);
+    let light_dir = normalize(light_pos - p);
+    
+    let diff = max(dot(normal, light_dir), 0.0);
+    let view_dir = normalize(ro - p);
+    let reflect_dir = reflect(-light_dir, normal);
+    let spec = pow(max(dot(view_dir, reflect_dir), 0.0), 32.0);
+    let fresnel = pow(1.0 - max(dot(normal, view_dir), 0.0), 5.0) * 0.3;
+    
+    let base_col = vec3<f32>(0.2, 0.55, 1.0);
+    return base_col * (diff + 0.1) + vec3<f32>(spec * 0.4) + vec3<f32>(fresnel);
 }
 
 // --- Shader Entry ---
@@ -76,30 +100,28 @@ fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let pixel_pos = in.clip_position.xy;
-    
     let rect_min = uniforms.rect_data.xy;
     let rect_size = uniforms.rect_data.zw;
-
-    let local_pos = pixel_pos - rect_min;
-    let uv_01 = local_pos / rect_size;
-    
     let aspect = rect_size.x / rect_size.y;
-    let uv = (uv_01 * 2.0 - 1.0) * vec2<f32>(aspect, 1.0);
 
-    let ro = vec3<f32>(0.0, 0.0, 3.5);
-    let rd = normalize(vec3<f32>(uv, -1.8));
-
-    let t = ray_march(ro, rd);
-
-    if (t > 20.0) {
-        return vec4<f32>(0.1, 0.1, 0.12, 1.0);
-    }
-
-    let p = ro + rd * t;
-    let normal = calc_normal(p);
-    let light_dir = normalize(vec3<f32>(0.5, 1.0, 0.5));
-    let diff = max(dot(normal, light_dir), 0.0);
+    // Explicitly unroll 2x2 SSAA to avoid indexing issues in some WGSL implementations
+    var total_color = vec3<f32>(0.0);
     
-    let col = vec3<f32>(0.2, 0.6, 1.0);
-    return vec4<f32>(col * (diff + 0.15), 1.0);
+    // Sample 1
+    var local_pos = (pixel_pos + vec2<f32>(-0.25, -0.25)) - rect_min;
+    total_color += render_scene(((local_pos / rect_size) * 2.0 - 1.0) * vec2<f32>(aspect, 1.0));
+
+    // Sample 2
+    local_pos = (pixel_pos + vec2<f32>(0.25, -0.25)) - rect_min;
+    total_color += render_scene(((local_pos / rect_size) * 2.0 - 1.0) * vec2<f32>(aspect, 1.0));
+
+    // Sample 3
+    local_pos = (pixel_pos + vec2<f32>(-0.25, 0.25)) - rect_min;
+    total_color += render_scene(((local_pos / rect_size) * 2.0 - 1.0) * vec2<f32>(aspect, 1.0));
+
+    // Sample 4
+    local_pos = (pixel_pos + vec2<f32>(0.25, 0.25)) - rect_min;
+    total_color += render_scene(((local_pos / rect_size) * 2.0 - 1.0) * vec2<f32>(aspect, 1.0));
+
+    return vec4<f32>(total_color / 4.0, 1.0);
 }
