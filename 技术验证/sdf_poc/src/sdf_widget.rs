@@ -20,13 +20,16 @@ pub struct SdfRenderResources {
 }
 
 impl SdfRenderResources {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Option<Self> {
-        let wgpu_render_state = cc.wgpu_render_state.as_ref()?;
-        let device = &wgpu_render_state.device;
-
+    // Helper to separate creation logic from eframe structs
+    pub fn create(device: &wgpu::Device, target_format: wgpu::TextureFormat, shader_source: &str) -> Option<Self> {
+         // Compile Shader with error handling
+         // If shader compilation fails, WGPU usually panics or returns an error based on device setup.
+         // We catch panics in main using `catch_unwind`? No, wgpu handles errors via error scope.
+         // But here we just try to create.
+         
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("SDF Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
         });
 
         let uniforms = Uniforms {
@@ -81,7 +84,7 @@ impl SdfRenderResources {
                 module: &shader,
                 entry_point: "fs_main",
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu_render_state.target_format,
+                    format: target_format,
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -103,6 +106,15 @@ impl SdfRenderResources {
             uniform_buffer,
             start_time: std::time::Instant::now(),
         })
+    }
+
+    pub fn new(cc: &eframe::CreationContext<'_>, shader_source: &str) -> Option<Self> {
+        let wgpu_render_state = cc.wgpu_render_state.as_ref()?;
+        Self::create(&wgpu_render_state.device, wgpu_render_state.target_format, shader_source)
+    }
+    
+    pub fn from_wgpu_state(rs: &egui_wgpu::RenderState, shader_source: &str) -> Option<Self> {
+        Self::create(&rs.device, rs.target_format, shader_source)
     }
 }
 
