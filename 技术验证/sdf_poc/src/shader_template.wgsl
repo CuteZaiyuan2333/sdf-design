@@ -31,16 +31,40 @@ fn sd_torus(p: vec3<f32>, t: vec2<f32>) -> f32 {
     return length(q) - t.y;
 }
 
-// --- SDF Operations ---
+// --- Result & Material Helpers ---
 
-fn op_smooth_union(d1: f32, d2: f32, k: f32) -> f32 {
-    let h = clamp(0.5 + 0.5 * (d2 - d1) / k, 0.0, 1.0);
-    return mix(d2, d1, h) - k * h * (1.0 - h);
+fn op_union(a: SdfResult, b: SdfResult) -> SdfResult {
+    if (a.dist < b.dist) { return a; }
+    return b;
 }
 
-fn op_smooth_subtraction(d1: f32, d2: f32, k: f32) -> f32 {
-    let h = clamp(0.5 - 0.5 * (d2 + d1) / k, 0.0, 1.0);
-    return mix(d1, -d2, h) + k * h * (1.0 - h);
+fn op_union_smooth(a: SdfResult, b: SdfResult, k: f32) -> SdfResult {
+    let h = clamp(0.5 + 0.5 * (b.dist - a.dist) / k, 0.0, 1.0);
+    let d = mix(b.dist, a.dist, h) - k * h * (1.0 - h);
+    let col = mix(b.color, a.color, h);
+    return SdfResult(d, col);
+}
+
+fn op_subtract(a: SdfResult, b: SdfResult) -> SdfResult {
+    let d = max(a.dist, -b.dist);
+    return SdfResult(d, a.color);
+}
+
+fn op_subtract_smooth(a: SdfResult, b: SdfResult, k: f32) -> SdfResult {
+    let h = clamp(0.5 - 0.5 * (b.dist + a.dist) / k, 0.0, 1.0);
+    let d = mix(a.dist, -b.dist, h) + k * h * (1.0 - h);
+    return SdfResult(d, a.color);
+}
+
+fn op_intersect(a: SdfResult, b: SdfResult) -> SdfResult {
+    if (a.dist > b.dist) { return a; }
+    return b;
+}
+
+fn set_color(res: SdfResult, col: vec3<f32>) -> SdfResult {
+    var out = res;
+    out.color = col;
+    return out;
 }
 
 // --- Transforms ---
@@ -65,24 +89,27 @@ fn rotate_z(p: vec3<f32>, angle: f32) -> vec3<f32> {
 fn calc_normal(p: vec3<f32>) -> vec3<f32> {
     let e = vec2<f32>(0.0005, 0.0);
     return normalize(vec3<f32>(
-        map(p + e.xyy) - map(p - e.xyy),
-        map(p + e.yxy) - map(p - e.yxy),
-        map(p + e.yyx) - map(p - e.yyx)
+        map(p + e.xyy).dist - map(p - e.xyy).dist,
+        map(p + e.yxy).dist - map(p - e.yxy).dist,
+        map(p + e.yyx).dist - map(p - e.yyx).dist
     ));
 }
 
-fn ray_march(ro: vec3<f32>, rd: vec3<f32>) -> f32 {
+fn ray_march(ro: vec3<f32>, rd: vec3<f32>) -> SdfResult {
     var t = 0.0;
+    var res = SdfResult(100.0, vec3<f32>(0.0));
     for (var i = 0; i < 128; i++) {
         let p = ro + rd * t;
-        let d = map(p);
-        if (d < 0.0005 || t > 50.0) { break; }
-        t += d;
+        res = map(p);
+        if (res.dist < 0.0005 || t > 50.0) { 
+            res.dist = t;
+            break; 
+        }
+        t += res.dist;
     }
-    return t;
+    return res;
 }
 
-// Infinite Grid Logic
 fn get_grid_color(p: vec3<f32>, rd: vec3<f32>) -> vec4<f32> {
     let t = -p.y / rd.y;
     if (t > 0.0 && t < 100.0) {
@@ -91,7 +118,13 @@ fn get_grid_color(p: vec3<f32>, rd: vec3<f32>) -> vec4<f32> {
         let line = min(grid.x, grid.y);
         let color = 1.0 - min(line, 1.0);
         let alpha = color * exp(-t * 0.05) * 0.3;
-        return vec4<f32>(vec3<f32>(0.5), alpha);
+        
+        // Origin Axes
+        var col = vec3<f32>(0.5);
+        if (abs(pos.x) < 0.05) { col = vec3<f32>(0.0, 0.0, 1.0); } // Z axis
+        if (abs(pos.z) < 0.05) { col = vec3<f32>(1.0, 0.0, 0.0); } // X axis
+
+        return vec4<f32>(col, alpha);
     }
     return vec4<f32>(0.0);
 }
@@ -103,10 +136,10 @@ fn render_scene(uv: vec2<f32>) -> vec3<f32> {
     let up = normalize(uniforms.cam_up.xyz);
     let rd = normalize(uv.x * right + uv.y * up + 1.8 * forward);
 
-    let t = ray_march(ro, rd);
+    let res = ray_march(ro, rd);
+    let t = res.dist;
     let bg_color = vec3<f32>(0.08, 0.08, 0.1);
     
-    // Background and Grid
     var col = bg_color;
     let grid = get_grid_color(ro, rd);
     col = mix(col, grid.rgb, grid.a);
@@ -121,8 +154,7 @@ fn render_scene(uv: vec2<f32>) -> vec3<f32> {
         let spec = pow(max(dot(view_dir, reflect_dir), 0.0), 32.0);
         let fresnel = pow(1.0 - max(dot(normal, view_dir), 0.0), 5.0) * 0.3;
         
-        let base_col = vec3<f32>(0.2, 0.55, 1.0);
-        let lit_col = base_col * (diff + 0.1) + vec3<f32>(spec * 0.4) + vec3<f32>(fresnel);
+        let lit_col = res.color * (diff + 0.1) + vec3<f32>(spec * 0.4) + vec3<f32>(fresnel);
         col = lit_col;
     }
     
@@ -144,23 +176,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let rect_min = uniforms.rect_data.xy;
     let rect_size = uniforms.rect_data.zw;
     let aspect = rect_size.x / rect_size.y;
-    
     var total = vec3<f32>(0.0);
     
-    // Sample 1
-    var uv = (((pixel_pos + vec2<f32>(-0.25, -0.25) - rect_min) / rect_size) * 2.0 - 1.0) * vec2<f32>(aspect, 1.0);
+    var uv = (((pixel_pos + vec2<f32>(-0.25, -0.25) - rect_min) / rect_size) * 2.0 - 1.0) * vec2<f32>(aspect, -1.0);
     total += render_scene(uv);
-    
-    // Sample 2
-    uv = (((pixel_pos + vec2<f32>(0.25, -0.25) - rect_min) / rect_size) * 2.0 - 1.0) * vec2<f32>(aspect, 1.0);
+    uv = (((pixel_pos + vec2<f32>(0.25, -0.25) - rect_min) / rect_size) * 2.0 - 1.0) * vec2<f32>(aspect, -1.0);
     total += render_scene(uv);
-    
-    // Sample 3
-    uv = (((pixel_pos + vec2<f32>(-0.25, 0.25) - rect_min) / rect_size) * 2.0 - 1.0) * vec2<f32>(aspect, 1.0);
+    uv = (((pixel_pos + vec2<f32>(-0.25, 0.25) - rect_min) / rect_size) * 2.0 - 1.0) * vec2<f32>(aspect, -1.0);
     total += render_scene(uv);
-    
-    // Sample 4
-    uv = (((pixel_pos + vec2<f32>(0.25, 0.25) - rect_min) / rect_size) * 2.0 - 1.0) * vec2<f32>(aspect, 1.0);
+    uv = (((pixel_pos + vec2<f32>(0.25, 0.25) - rect_min) / rect_size) * 2.0 - 1.0) * vec2<f32>(aspect, -1.0);
     total += render_scene(uv);
 
     return vec4<f32>(total / 4.0, 1.0);

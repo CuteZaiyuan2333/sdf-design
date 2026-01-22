@@ -13,6 +13,10 @@ pub enum SdfOp {
     
     Translate { target: Box<SdfNode>, offset: [f32; 3] },
     Rotate { target: Box<SdfNode>, axis: [f32; 3], angle_deg: f32 },
+    Mirror { target: Box<SdfNode>, axis: [f32; 3] },
+    
+    // Attribute
+    Color { target: Box<SdfNode>, color: [f32; 3] },
 }
 
 #[derive(Clone, Debug)]
@@ -30,11 +34,19 @@ impl SdfNode {
     pub fn smooth_union(&mut self, other: SdfNode, k: f32) -> SdfNode { Self { op: SdfOp::Union { a: Box::new(self.clone()), b: Box::new(other), smooth: k } } }
     pub fn subtract(&mut self, other: SdfNode) -> SdfNode { Self { op: SdfOp::Subtract { a: Box::new(self.clone()), b: Box::new(other), smooth: 0.0 } } }
     pub fn smooth_subtract(&mut self, other: SdfNode, k: f32) -> SdfNode { Self { op: SdfOp::Subtract { a: Box::new(self.clone()), b: Box::new(other), smooth: k } } }
-    pub fn intersect(&mut self, other: SdfNode) -> SdfNode { Self { op: SdfOp::Intersect { a: Box::new(self.clone()), b: Box::new(other), smooth: 0.0 } } }
+    
     pub fn translate(&mut self, x: f32, y: f32, z: f32) -> SdfNode { Self { op: SdfOp::Translate { target: Box::new(self.clone()), offset: [x, y, z] } } }
     pub fn rotate_x(&mut self, deg: f32) -> SdfNode { Self { op: SdfOp::Rotate { target: Box::new(self.clone()), axis: [1.0, 0.0, 0.0], angle_deg: deg } } }
     pub fn rotate_y(&mut self, deg: f32) -> SdfNode { Self { op: SdfOp::Rotate { target: Box::new(self.clone()), axis: [0.0, 1.0, 0.0], angle_deg: deg } } }
     pub fn rotate_z(&mut self, deg: f32) -> SdfNode { Self { op: SdfOp::Rotate { target: Box::new(self.clone()), axis: [0.0, 0.0, 1.0], angle_deg: deg } } }
+    
+    pub fn mirror_x(&mut self) -> SdfNode { Self { op: SdfOp::Mirror { target: Box::new(self.clone()), axis: [1.0, 0.0, 0.0] } } }
+    pub fn mirror_y(&mut self) -> SdfNode { Self { op: SdfOp::Mirror { target: Box::new(self.clone()), axis: [0.0, 1.0, 0.0] } } }
+    pub fn mirror_z(&mut self) -> SdfNode { Self { op: SdfOp::Mirror { target: Box::new(self.clone()), axis: [0.0, 0.0, 1.0] } } }
+
+    pub fn color(&mut self, r: f32, g: f32, b: f32) -> SdfNode { 
+        Self { op: SdfOp::Color { target: Box::new(self.clone()), color: [r, g, b] } } 
+    }
 }
 
 impl CustomType for SdfNode {
@@ -43,12 +55,14 @@ impl CustomType for SdfNode {
             .with_fn("union", SdfNode::union).with_fn("add", SdfNode::union)
             .with_fn("smooth_union", SdfNode::smooth_union)
             .with_fn("subtract", SdfNode::subtract).with_fn("sub", SdfNode::subtract)
-            .with_fn("smooth_subtract", SdfNode::smooth_subtract)
-            .with_fn("intersect", SdfNode::intersect)
             .with_fn("translate", SdfNode::translate).with_fn("move", SdfNode::translate)
             .with_fn("rotate_x", SdfNode::rotate_x)
             .with_fn("rotate_y", SdfNode::rotate_y)
-            .with_fn("rotate_z", SdfNode::rotate_z);
+            .with_fn("rotate_z", SdfNode::rotate_z)
+            .with_fn("mirror_x", SdfNode::mirror_x)
+            .with_fn("mirror_y", SdfNode::mirror_y)
+            .with_fn("mirror_z", SdfNode::mirror_z)
+            .with_fn("color", SdfNode::color);
     }
 }
 
@@ -56,7 +70,6 @@ pub fn register_rhai_types(engine: &mut Engine) {
     engine.build_type::<SdfNode>();
     engine.register_fn("sphere", SdfNode::new_sphere);
     engine.register_fn("box", SdfNode::new_box);
-    engine.register_fn("cube", SdfNode::new_box);
     engine.register_fn("cylinder", SdfNode::new_cylinder);
     engine.register_fn("torus", SdfNode::new_torus);
 }

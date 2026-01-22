@@ -44,7 +44,7 @@ impl Camera {
             let sensitivity = 0.005;
             
             self.yaw += delta.x * sensitivity;
-            self.pitch += delta.y * sensitivity;
+            self.pitch -= delta.y * sensitivity; // 修复：鼠标向下移动(delta.y > 0)时视角向下看
             self.pitch = self.pitch.clamp(-1.5, 1.5);
         }
 
@@ -86,11 +86,14 @@ impl SdfApp {
         register_rhai_types(&mut engine);
 
         let default_code = r#"
-// New Primitives: cylinder(radius, height), torus(major, minor)
-// Try this: A pipe with a hole
-let pipe = cylinder(0.5, 2.0);
-let hole = cylinder(0.4, 2.1);
-pipe.subtract(hole)
+// Colors and Mirroring demo
+let body = box(1.0, 0.2, 0.5).color(0.8, 0.8, 0.8);
+let wheel = torus(0.4, 0.1).rotate_x(90.0).color(0.2, 0.2, 0.2);
+
+// Move wheel to position and mirror it across X and Z axes
+let wheels = wheel.translate(1.0, 0.0, 0.6).mirror_x().mirror_z();
+
+body.union(wheels)
 "#;
         
         let initial_shader = Self::compile_shader(&engine, default_code);
