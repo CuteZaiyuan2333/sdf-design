@@ -8,8 +8,12 @@ use std::sync::Arc;
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct Uniforms {
-    rect_data: [f32; 4], // x, y, w, h
-    time_data: [f32; 4], // time, padding, padding, padding
+    rect_data: [f32; 4],     // x, y, w, h
+    time_data: [f32; 4],     // time, padding...
+    cam_pos:   [f32; 4],     // x, y, z, padding
+    cam_right: [f32; 4],     // x, y, z, padding
+    cam_up:    [f32; 4],     // x, y, z, padding
+    cam_front: [f32; 4],     // x, y, z, padding
 }
 
 pub struct SdfRenderResources {
@@ -20,22 +24,23 @@ pub struct SdfRenderResources {
 }
 
 impl SdfRenderResources {
-    // Helper to separate creation logic from eframe structs
     pub fn create(device: &wgpu::Device, target_format: wgpu::TextureFormat, shader_source: &str) -> Option<Self> {
-         // Compile Shader with error handling
-         // If shader compilation fails, WGPU usually panics or returns an error based on device setup.
-         // We catch panics in main using `catch_unwind`? No, wgpu handles errors via error scope.
-         // But here we just try to create.
-         
+        // Compile Shader
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("SDF Shader"),
             source: wgpu::ShaderSource::Wgsl(shader_source.into()),
         });
 
+        // Initial zeroed uniforms
         let uniforms = Uniforms {
-            rect_data: [0.0, 0.0, 1.0, 1.0],
-            time_data: [0.0, 0.0, 0.0, 0.0],
+            rect_data: [0.0; 4],
+            time_data: [0.0; 4],
+            cam_pos:   [0.0; 4],
+            cam_right: [0.0; 4],
+            cam_up:    [0.0; 4],
+            cam_front: [0.0; 4],
         };
+        
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("SDF Uniform Buffer"),
             contents: bytemuck::cast_slice(&[uniforms]),
@@ -118,10 +123,18 @@ impl SdfRenderResources {
     }
 }
 
+pub struct CameraUniformData {
+    pub pos: [f32; 3],
+    pub right: [f32; 3],
+    pub up: [f32; 3],
+    pub front: [f32; 3],
+}
+
 pub struct SdfCallback {
     resources: Arc<SdfRenderResources>,
     time: f32,
-    rect: Rect, 
+    rect: Rect,
+    camera: CameraUniformData,
 }
 
 impl CallbackTrait for SdfCallback {
@@ -135,6 +148,8 @@ impl CallbackTrait for SdfCallback {
     ) -> Vec<wgpu::CommandBuffer> {
         let ppp = screen_descriptor.pixels_per_point;
         
+        let c = &self.camera;
+        
         let uniforms = Uniforms {
             rect_data: [
                 self.rect.min.x * ppp,
@@ -143,6 +158,10 @@ impl CallbackTrait for SdfCallback {
                 self.rect.height() * ppp,
             ],
             time_data: [self.time, 0.0, 0.0, 0.0],
+            cam_pos:   [c.pos[0], c.pos[1], c.pos[2], 1.0],
+            cam_right: [c.right[0], c.right[1], c.right[2], 0.0],
+            cam_up:    [c.up[0], c.up[1], c.up[2], 0.0],
+            cam_front: [c.front[0], c.front[1], c.front[2], 0.0],
         };
         
         queue.write_buffer(&self.resources.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
@@ -161,10 +180,10 @@ impl CallbackTrait for SdfCallback {
     }
 }
 
-pub fn sdf_view(ui: &mut Ui, resources: &Arc<SdfRenderResources>) {
+pub fn sdf_view(ui: &mut Ui, resources: &Arc<SdfRenderResources>, camera: CameraUniformData) -> eframe::egui::Response {
     let available = ui.available_size();
     let size = Vec2::new(available.x.max(100.0), available.y.max(100.0));
-    let (rect, _response) = ui.allocate_exact_size(size, Sense::drag());
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
     
     let time = resources.start_time.elapsed().as_secs_f32();
 
@@ -174,8 +193,11 @@ pub fn sdf_view(ui: &mut Ui, resources: &Arc<SdfRenderResources>) {
             resources: resources.clone(),
             time,
             rect,
+            camera,
         },
     );
 
     ui.painter().add(callback);
+    
+    response
 }

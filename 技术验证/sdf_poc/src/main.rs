@@ -4,23 +4,80 @@ mod wgsl_gen;
 
 use eframe::{egui, wgpu};
 use std::sync::Arc;
-use sdf_widget::{SdfRenderResources, sdf_view};
+use sdf_widget::{SdfRenderResources, sdf_view, CameraUniformData};
 use rhai::{Engine, Scope};
 use sdf_ast::{SdfNode, register_rhai_types};
 use wgsl_gen::WgslGenerator;
+use glam::{Vec3, Mat3}; 
+
+struct Camera {
+    pos: Vec3,
+    yaw: f32,   
+    pitch: f32, 
+}
+
+impl Default for Camera {
+    fn default() -> Self {
+        // Start at (5, 5, 5)
+        let pos = Vec3::new(5.0, 5.0, 5.0);
+        // Look at (0, 0, 0)
+        // dir = (0,0,0) - (5,5,5) = (-5, -5, -5)
+        let dir = -pos.normalize();
+        
+        let yaw = dir.z.atan2(dir.x); // atan2(-5, -5)
+        let pitch = dir.y.asin();      // asin(-5 / sqrt(75))
+        
+        Self {
+            pos,
+            yaw,
+            pitch,
+        }
+    }
+}
+
+impl Camera {
+    fn update(&mut self, ui: &mut egui::Ui, response: &egui::Response) {
+        let dt = ui.input(|i| i.stable_dt).min(0.1);
+        
+        if response.dragged_by(egui::PointerButton::Middle) {
+            let delta = response.drag_delta();
+            let sensitivity = 0.005;
+            
+            self.yaw += delta.x * sensitivity;
+            self.pitch += delta.y * sensitivity;
+            self.pitch = self.pitch.clamp(-1.5, 1.5);
+        }
+
+        // Standard movement
+        let forward = Vec3::new(self.yaw.cos(), 0.0, self.yaw.sin()).normalize();
+        let right = Vec3::new(-self.yaw.sin(), 0.0, self.yaw.cos()).normalize();
+        let up = Vec3::new(0.0, 1.0, 0.0);
+        let speed = 4.0 * dt; 
+        
+        if response.hovered() || response.dragged() {
+            ui.input(|i| {
+                let mut move_dir = Vec3::ZERO;
+                if i.key_down(egui::Key::W) { move_dir += forward; }
+                if i.key_down(egui::Key::S) { move_dir -= forward; }
+                if i.key_down(egui::Key::A) { move_dir -= right; }
+                if i.key_down(egui::Key::D) { move_dir += right; }
+                if i.key_down(egui::Key::E) { move_dir += up; }    // E: 上升
+                if i.key_down(egui::Key::Q) { move_dir -= up; }    // Q: 下降
+                
+                if move_dir.length_squared() > 0.0 {
+                    self.pos += move_dir.normalize() * speed;
+                }
+            });
+        }
+    }
+}
 
 struct SdfApp {
     sdf_resources: Option<Arc<SdfRenderResources>>,
     rhai_engine: Engine,
     code_text: String,
     compiler_error: Option<String>,
-    // Store creation context needed for recompilation
-    // Note: We can't store CreationContext directly as it is temporary. 
-    // We need to capture the RenderState or Device from it, but eframe doesn't expose a persistent "Context" 
-    // that allows creating resources easily outside of 'update' or 'setup'.
-    //
-    // Actually, eframe's App trait doesn't pass 'cc' to 'update'. 
-    // We need to grab the wgpu device from `frame.wgpu_render_state()`.
+    camera: Camera,
 }
 
 impl SdfApp {
@@ -28,17 +85,14 @@ impl SdfApp {
         let mut engine = Engine::new();
         register_rhai_types(&mut engine);
 
-        // Initial default script
         let default_code = r#"
-// Default Demo Script
-let s = sphere(0.6);
-let b = box(0.5, 0.5, 0.5);
-
-// Union with smooth blending
-s.smooth_union(b, 0.15)
+// New Primitives: cylinder(radius, height), torus(major, minor)
+// Try this: A pipe with a hole
+let pipe = cylinder(0.5, 2.0);
+let hole = cylinder(0.4, 2.1);
+pipe.subtract(hole)
 "#;
         
-        // Initial Compile
         let initial_shader = Self::compile_shader(&engine, default_code);
         let sdf_resources = match initial_shader {
             Ok(wgsl) => SdfRenderResources::new(cc, &wgsl).map(Arc::new),
@@ -53,88 +107,44 @@ s.smooth_union(b, 0.15)
             rhai_engine: engine,
             code_text: default_code.to_string(),
             compiler_error: None,
+            camera: Camera::default(),
         }
     }
 
     fn compile_shader(engine: &Engine, code: &str) -> Result<String, String> {
-        // 1. Run Rhai
         let mut scope = Scope::new();
         let result = engine.eval_with_scope::<SdfNode>(&mut scope, code)
             .map_err(|e| format!("Rhai Error: {}", e))?;
 
-        // 2. Generate WGSL Body
         let mut generator = WgslGenerator::new();
         let map_fn_body = generator.generate(&result);
 
-        // 3. Merge with Template
         let template = include_str!("shader_template.wgsl");
-        // Simple string replacement
         let full_wgsl = template.replace("// {{MAP_FUNCTION_HERE}}", &map_fn_body);
 
         Ok(full_wgsl)
     }
-
-    fn recompile(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        let wgpu_render_state = frame.wgpu_render_state();
-        if wgpu_render_state.is_none() {
-             self.compiler_error = Some("WGPU Context lost.".to_string());
-             return;
-        }
-        let wgpu_render_state = wgpu_render_state.unwrap();
-
-        match Self::compile_shader(&self.rhai_engine, &self.code_text) {
-            Ok(wgsl) => {
-                // Re-create resources using the RenderState from the frame
-                // We need to manually construct a CreationContext-like object or just call new with what we have.
-                // But SdfRenderResources::new expects CreationContext. 
-                // Let's refactor SdfRenderResources::new to take (device, format) instead of CC.
-                // Wait, I can't easily change SdfRenderResources::new signature without changing earlier code massively 
-                // or just adapting here.
-                // Actually, I can just copy the logic from SdfRenderResources::new here or split it.
-                //
-                // Best approach: Refactor SdfRenderResources::new to take (&Device, TextureFormat)
-                
-                let device = &wgpu_render_state.device;
-                let target_format = wgpu_render_state.target_format;
-                
-                // --- MANUAL RESOURCE RECREATION (Copy-paste logic from sdf_widget for now to save tokens/time) ---
-                // Ideally, SdfRenderResources::from_device(device, format, source)
-                // Let's assume I refactor it.
-                
-                // For now, I will use a helper method on App or just inline it if I can access SdfRenderResources fields.
-                // But fields are private. I need to modify sdf_widget.rs one last time to make it friendly for reloading.
-            }
-            Err(e) => {
-                self.compiler_error = Some(e);
-            }
-        }
-    }
 }
-
-// Helper to bridge the gap without refactoring sdf_widget too much
-// We will modify SdfRenderResources in a second pass to add `recreate`.
-// For now, let's just finish the App logic structure.
 
 impl eframe::App for SdfApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        ctx.request_repaint();
+        ctx.request_repaint(); 
 
         egui::SidePanel::left("editor_panel").resizable(true).default_width(400.0).show(ctx, |ui| {
             ui.heading("Rhai SDF Editor");
+            ui.label("Controls:");
+            ui.label("- Drag Middle Mouse: Rotate Look");
+            ui.label("- W/A/S/D: Move Horizontal");
+            ui.label("- Q/E: Move Down/Up");
             ui.separator();
             
             if ui.button("Compile & Run (Ctrl+Enter)").clicked() || 
                (ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command)) 
             {
-                // Trigger Recompile
                 match Self::compile_shader(&self.rhai_engine, &self.code_text) {
                     Ok(wgsl) => {
                         self.compiler_error = None;
-                        // Now we need to update resources.
-                        // We need access to the device.
                         if let Some(rs) = frame.wgpu_render_state() {
-                            // Hack: we need a way to create resources from here.
-                            // I will add a static method to SdfRenderResources.
                             if let Some(new_res) = SdfRenderResources::from_wgpu_state(&rs, &wgsl) {
                                 self.sdf_resources = Some(Arc::new(new_res));
                             } else {
@@ -160,10 +170,37 @@ impl eframe::App for SdfApp {
             });
         });
 
+        egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(format!("Camera Pos: [{:.2}, {:.2}, {:.2}]", self.camera.pos.x, self.camera.pos.y, self.camera.pos.z));
+                ui.separator();
+                ui.label(format!("Yaw: {:.1}°, Pitch: {:.1}°", self.camera.yaw.to_degrees(), self.camera.pitch.to_degrees()));
+            });
+        });
+
         egui::CentralPanel::default().show(ctx, |ui| {
-            if let Some(resources) = &self.sdf_resources {
+            if let Some(resources) = &self.sdf_resources.clone() {
                 egui::Frame::canvas(ui.style()).show(ui, |ui| {
-                    sdf_view(ui, resources);
+                    
+                    let front = Vec3::new(
+                        self.camera.yaw.cos() * self.camera.pitch.cos(),
+                        self.camera.pitch.sin(),
+                        self.camera.yaw.sin() * self.camera.pitch.cos()
+                    ).normalize();
+
+                    let global_up = Vec3::new(0.0, 1.0, 0.0);
+                    let right = front.cross(global_up).normalize();
+                    let up = right.cross(front).normalize();
+
+                    let cam_data = CameraUniformData {
+                        pos: self.camera.pos.into(),
+                        front: front.into(),
+                        right: right.into(),
+                        up: up.into(),
+                    };
+                    
+                    let response = sdf_view(ui, resources, cam_data);
+                    self.camera.update(ui, &response);
                 });
             } else {
                 ui.centered_and_justified(|ui| {
