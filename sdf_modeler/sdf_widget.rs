@@ -8,12 +8,12 @@ use std::sync::Arc;
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct Uniforms {
-    rect_data: [f32; 4],     // x, y, w, h
-    time_data: [f32; 4],     // time, padding...
-    cam_pos:   [f32; 4],     // x, y, z, padding
-    cam_right: [f32; 4],     // x, y, z, padding
-    cam_up:    [f32; 4],     // x, y, z, padding
-    cam_front: [f32; 4],     // x, y, z, padding
+    rect_data: [f32; 4],
+    time_data: [f32; 4],
+    cam_pos:   [f32; 4],
+    cam_right: [f32; 4],
+    cam_up:    [f32; 4],
+    cam_front: [f32; 4],
 }
 
 pub struct SdfRenderResources {
@@ -134,13 +134,10 @@ impl CallbackTrait for SdfCallback {
         _egui_encoder: &mut wgpu::CommandEncoder,
         _callback_resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        // 在 prepare 中初始化资源。如果格式未知，我们通过猜测尝试最常见的格式。
-        // 在 Windows 上，通常是 Bgra8UnormSrgb 或 Rgba8UnormSrgb。
         {
             let mut res_lock = self.resources.write();
             if res_lock.is_none() {
-                // 修改为与 eframe 匹配的格式
-                let target_format = wgpu::TextureFormat::Bgra8Unorm; 
+                let target_format = wgpu::TextureFormat::Bgra8Unorm;
                 if let Some(res) = SdfRenderResources::create(device, target_format, &self.shader_source) {
                     *res_lock = Some(Arc::new(res));
                 }
@@ -151,6 +148,7 @@ impl CallbackTrait for SdfCallback {
         if let Some(resources) = res_lock.as_ref() {
             let ppp = screen_descriptor.pixels_per_point;
             let c = &self.camera;
+            
             let uniforms = Uniforms {
                 rect_data: [
                     self.rect.min.x * ppp,

@@ -3,7 +3,7 @@ struct Uniforms {
     time_data: vec4<f32>,
     cam_pos: vec4<f32>,
     cam_right: vec4<f32>,
-    cam_up: vec4<f32>,
+    cam_up:    vec4<f32>,
     cam_front: vec4<f32>,
 };
 
@@ -98,14 +98,17 @@ fn calc_normal(p: vec3<f32>) -> vec3<f32> {
 fn ray_march(ro: vec3<f32>, rd: vec3<f32>) -> SdfResult {
     var t = 0.0;
     var res = SdfResult(100.0, vec3<f32>(0.0));
+    
     for (var i = 0; i < 128; i++) {
         let p = ro + rd * t;
         res = map(p);
-        if (res.dist < 0.0005 || t > 50.0) { 
+        
+        let d = abs(res.dist);
+        if (d < 0.001 || t > 50.0) { 
             res.dist = t;
             break; 
         }
-        t += res.dist;
+        t += d;
     }
     return res;
 }
@@ -119,7 +122,6 @@ fn get_grid_color(p: vec3<f32>, rd: vec3<f32>) -> vec4<f32> {
         let color = 1.0 - min(line, 1.0);
         let alpha = color * exp(-t * 0.05) * 0.3;
         
-        // Origin Axes
         var col = vec3<f32>(0.5);
         if (abs(pos.x) < 0.05) { col = vec3<f32>(0.0, 0.0, 1.0); } // Z axis
         if (abs(pos.z) < 0.05) { col = vec3<f32>(1.0, 0.0, 0.0); } // X axis
@@ -176,16 +178,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let rect_min = uniforms.rect_data.xy;
     let rect_size = uniforms.rect_data.zw;
     let aspect = rect_size.x / rect_size.y;
-    var total = vec3<f32>(0.0);
     
-    var uv = (((pixel_pos + vec2<f32>(-0.25, -0.25) - rect_min) / rect_size) * 2.0 - 1.0) * vec2<f32>(aspect, -1.0);
-    total += render_scene(uv);
-    uv = (((pixel_pos + vec2<f32>(0.25, -0.25) - rect_min) / rect_size) * 2.0 - 1.0) * vec2<f32>(aspect, -1.0);
-    total += render_scene(uv);
-    uv = (((pixel_pos + vec2<f32>(-0.25, 0.25) - rect_min) / rect_size) * 2.0 - 1.0) * vec2<f32>(aspect, -1.0);
-    total += render_scene(uv);
-    uv = (((pixel_pos + vec2<f32>(0.25, 0.25) - rect_min) / rect_size) * 2.0 - 1.0) * vec2<f32>(aspect, -1.0);
-    total += render_scene(uv);
+    var total_color = vec3<f32>(0.0);
+    
+    // Global 8x8 SSAA (64 samples per pixel)
+    // Grid offset goes from -0.4375 to 0.4375
+    for (var iy: i32 = 0; iy < 8; iy = iy + 1) {
+        for (var ix: i32 = 0; ix < 8; ix = ix + 1) {
+            let offset = (vec2<f32>(f32(ix), f32(iy)) + 0.5) / 8.0 - 0.5;
+            let uv = (((pixel_pos + offset - rect_min) / rect_size) * 2.0 - 1.0) * vec2<f32>(aspect, -1.0);
+            total_color += render_scene(uv);
+        }
+    }
 
-    return vec4<f32>(total / 4.0, 1.0);
+    return vec4<f32>(total_color / 64.0, 1.0);
 }

@@ -15,7 +15,7 @@ use wgsl_gen::WgslGenerator;
 use glam::Vec3;
 use rhai::{Engine, Scope};
 
-// --- Camera Logic (Unchanged) ---
+// --- Camera Logic ---
 
 struct Camera {
     pos: Vec3,
@@ -36,8 +36,6 @@ impl Default for Camera {
 impl Camera {
     fn update(&mut self, ui: &mut egui::Ui, response: &egui::Response) {
         let dt = ui.input(|i| i.stable_dt).min(0.1);
-        
-        // Mouse Look
         if response.dragged_by(egui::PointerButton::Middle) {
             let delta = response.drag_delta();
             let sensitivity = 0.005;
@@ -46,7 +44,6 @@ impl Camera {
             self.pitch = self.pitch.clamp(-1.5, 1.5);
         }
 
-        // Keyboard Move
         let forward = Vec3::new(self.yaw.cos(), 0.0, self.yaw.sin()).normalize();
         let right = Vec3::new(-self.yaw.sin(), 0.0, self.yaw.cos()).normalize();
         let up = Vec3::new(0.0, 1.0, 0.0);
@@ -74,24 +71,17 @@ impl Camera {
 
 #[derive(Clone)]
 pub struct SdfTab {
-    // 3D Resources
     sdf_resources: Arc<parking_lot::RwLock<Option<Arc<sdf_widget::SdfRenderResources>>>>,
     camera: Arc<std::sync::Mutex<Camera>>,
     current_shader: String,
-    
-    // Logic Resources
     rhai_engine: Arc<Engine>,
-    
-    // Project State
     project_path: Option<PathBuf>,
     compiler_error: Option<String>,
 }
 
 impl std::fmt::Debug for SdfTab {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SdfTab")
-         .field("project_path", &self.project_path)
-         .finish()
+        f.debug_struct("SdfTab").field("project_path", &self.project_path).finish()
     }
 }
 
@@ -104,9 +94,7 @@ impl SdfTab {
             sdf_resources: Arc::new(parking_lot::RwLock::new(None)),
             camera: Arc::new(std::sync::Mutex::new(Camera::default())),
             current_shader: String::new(),
-            
             rhai_engine: Arc::new(engine),
-            
             project_path: None,
             compiler_error: None,
         }
@@ -115,21 +103,15 @@ impl SdfTab {
     fn compile_project(&mut self) -> Result<String, String> {
         let path = self.project_path.as_ref().ok_or("No project opened")?;
         let entry_file = path.join("main.rhai");
-        
-        let code = fs::read_to_string(&entry_file)
-            .map_err(|e| format!("Failed to read main.rhai: {}", e))?;
+        let code = fs::read_to_string(&entry_file).map_err(|e| format!("Failed to read main.rhai: {}", e))?;
 
         let mut scope = Scope::new();
-        let result = self.rhai_engine.eval_with_scope::<SdfNode>(&mut scope, &code)
-            .map_err(|e| format!("Rhai Error: {}", e))?;
+        let result = self.rhai_engine.eval_with_scope::<SdfNode>(&mut scope, &code).map_err(|e| format!("Rhai Error: {}", e))?;
 
         let mut generator = WgslGenerator::new();
         let map_fn_body = generator.generate(&result);
-
         let template = include_str!("shader_template.wgsl");
-        let full_wgsl = template.replace("// {{MAP_FUNCTION_HERE}}", &map_fn_body);
-
-        Ok(full_wgsl)
+        Ok(template.replace("// {{MAP_FUNCTION_HERE}}", &map_fn_body))
     }
 }
 
@@ -144,29 +126,21 @@ impl TabInstance for SdfTab {
     }
 
     fn ui(&mut self, ui: &mut Ui, control: &mut Vec<AppCommand>) {
-        // --- Top Bar: Project Controls ---
         egui::TopBottomPanel::top("sdf_top_bar").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("📂 Open Project...").clicked() {
                     if let Some(path) = rfd::FileDialog::new().pick_folder() {
                         self.project_path = Some(path);
-                        // Auto-compile on open
                         match self.compile_project() {
                             Ok(wgsl) => {
                                 self.compiler_error = None;
                                 self.current_shader = wgsl;
                                 *self.sdf_resources.write() = None;
-                                control.push(AppCommand::Notify { 
-                                    message: "Project opened & compiled".into(), 
-                                    level: crate::NotificationLevel::Success 
-                                });
+                                control.push(AppCommand::Notify { message: "Project opened & compiled".into(), level: crate::NotificationLevel::Success });
                             }
                             Err(e) => {
                                 self.compiler_error = Some(e);
-                                control.push(AppCommand::Notify { 
-                                    message: "Project opened but compilation failed".into(), 
-                                    level: crate::NotificationLevel::Warning 
-                                });
+                                control.push(AppCommand::Notify { message: "Compilation failed".into(), level: crate::NotificationLevel::Warning });
                             }
                         }
                     }
@@ -175,65 +149,41 @@ impl TabInstance for SdfTab {
                 if let Some(path) = &self.project_path {
                     ui.label(path.to_string_lossy().to_string());
                     ui.separator();
-                    
-                    let run_btn = ui.button("▶ Compile & Run");
-                    if run_btn.clicked() {
+                    if ui.button("▶ Compile & Run").clicked() {
                         match self.compile_project() {
                             Ok(wgsl) => {
                                 self.compiler_error = None;
                                 self.current_shader = wgsl;
                                 *self.sdf_resources.write() = None;
-                                control.push(AppCommand::Notify { 
-                                    message: "Project compiled".into(), 
-                                    level: crate::NotificationLevel::Success 
-                                });
+                                control.push(AppCommand::Notify { message: "Project compiled".into(), level: crate::NotificationLevel::Success });
                             }
-                            Err(e) => {
-                                self.compiler_error = Some(e);
-                                control.push(AppCommand::Notify { 
-                                    message: "Compilation failed".into(), 
-                                    level: crate::NotificationLevel::Error 
-                                });
-                            }
+                            Err(e) => { self.compiler_error = Some(e); }
                         }
                     }
-                } else {
-                    ui.label("No project selected.");
-                    ui.weak("Select a folder containing 'main.rhai'");
                 }
             });
-            
-            // Error Display
             if let Some(err) = &self.compiler_error {
                 ui.separator();
                 ui.colored_label(egui::Color32::RED, err);
             }
         });
 
-        // --- Central: 3D Viewport ---
         egui::CentralPanel::default().show_inside(ui, |ui| {
+             ui.ctx().request_repaint();
+
              if self.current_shader.is_empty() {
-                 ui.centered_and_justified(|ui| {
-                     if self.project_path.is_none() {
-                         ui.label("Open a project to start.");
-                     } else {
-                         ui.label("Ready to compile.");
-                     }
-                 });
+                 ui.centered_and_justified(|ui| ui.label("Open a project to start."));
                  return;
              }
 
              let mut camera = self.camera.lock().unwrap();
              
-             // Calculate Camera Basis
              let front = Vec3::new(
                 camera.yaw.cos() * camera.pitch.cos(),
                 camera.pitch.sin(),
                 camera.yaw.sin() * camera.pitch.cos()
             ).normalize();
-
-            let global_up = Vec3::new(0.0, 1.0, 0.0);
-            let right = front.cross(global_up).normalize();
+            let right = front.cross(Vec3::Y).normalize();
             let up = right.cross(front).normalize();
 
             let cam_data = CameraUniformData {
@@ -243,18 +193,14 @@ impl TabInstance for SdfTab {
                 up: up.into(),
             };
             
-            // Draw 3D View
             let response = sdf_view(ui, &self.sdf_resources, self.current_shader.clone(), cam_data);
-            
-            // Handle Camera Input
             camera.update(ui, &response);
             
-            // Overlay: Status
             let rect = response.rect;
             ui.put(
-                egui::Rect::from_min_size(rect.left_bottom() + egui::vec2(10.0, -30.0), egui::vec2(200.0, 20.0)),
+                egui::Rect::from_min_size(rect.left_bottom() + egui::vec2(10.0, -30.0), egui::vec2(250.0, 20.0)),
                 |ui: &mut Ui| {
-                    ui.colored_label(egui::Color32::WHITE, format!("Cam: [{:.1}, {:.1}, {:.1}]", camera.pos.x, camera.pos.y, camera.pos.z))
+                    ui.colored_label(egui::Color32::WHITE, format!("Cam: [{:.1}, {:.1}, {:.1}] | 8x8 SSAA", camera.pos.x, camera.pos.y, camera.pos.z))
                 }
             );
         });

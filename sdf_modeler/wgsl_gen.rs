@@ -1,12 +1,10 @@
 use super::sdf_ast::{SdfNode, SdfOp};
 
-pub struct WgslGenerator {
-    _unused: bool,
-}
+pub struct WgslGenerator;
 
 impl WgslGenerator {
     pub fn new() -> Self {
-        Self { _unused: true }
+        Self
     }
 
     pub fn generate(&mut self, root: &SdfNode) -> String {
@@ -65,7 +63,6 @@ impl WgslGenerator {
                 self.emit_expression(target, &new_p)
             }
             SdfOp::Mirror { target, axis } => {
-                // p' = abs(p) for the mirror axis
                 let mut p_parts = [format!("{p_var}.x"), format!("{p_var}.y"), format!("{p_var}.z")];
                 if axis[0] > 0.9 { p_parts[0] = format!("abs({})", p_parts[0]); }
                 if axis[1] > 0.9 { p_parts[1] = format!("abs({})", p_parts[1]); }
@@ -75,7 +72,6 @@ impl WgslGenerator {
             }
             SdfOp::Color { target, color } => {
                 let res = self.emit_expression(target, p_var);
-                // We wrap the expression and just replace the color field
                 format!("set_color({}, vec3<f32>({:.4}, {:.4}, {:.4}))", res, color[0], color[1], color[2])
             }
         }

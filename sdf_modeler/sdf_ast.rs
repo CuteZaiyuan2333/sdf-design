@@ -16,7 +16,6 @@ pub enum SdfOp {
     Rotate { target: Box<SdfNode>, axis: [f32; 3], angle_deg: f32 },
     Mirror { target: Box<SdfNode>, axis: [f32; 3] },
     
-    // Attribute
     Color { target: Box<SdfNode>, color: [f32; 3] },
 }
 
