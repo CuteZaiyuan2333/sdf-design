@@ -1,4 +1,4 @@
-use super::sdf_ast::{SdfNode, SdfOp};
+use super::sdf_ast::{SdfNode, SdfOp, SsaaLevel};
 
 pub struct WgslGenerator;
 
@@ -7,8 +7,47 @@ impl WgslGenerator {
         Self
     }
 
-    pub fn generate(&mut self, root: &SdfNode) -> String {
-        let expression = self.emit_expression(root, "p_in");
+    pub fn generate(&mut self, root: &SdfNode, ssaa: SsaaLevel) -> String {
+        let map_expr = self.emit_expression(root, "p_in");
+        let n = ssaa.to_u32();
+        
+        let fs_main = if n <= 1 {
+            // No SSAA
+            format!(
+                "@fragment
+                fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
+                    let pixel_pos = in.clip_position.xy;
+                    let rect_min = uniforms.rect_data.xy;
+                    let rect_size = uniforms.rect_data.zw;
+                    let aspect = rect_size.x / rect_size.y;
+                    let uv = (((pixel_pos - rect_min) / rect_size) * 2.0 - 1.0) * vec2<f32>(aspect, -1.0);
+                    return vec4<f32>(render_scene(uv), 1.0);
+                }}"
+            )
+        } else {
+            // Dynamic SSAA loop
+            format!(
+                "@fragment
+                fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
+                    let pixel_pos = in.clip_position.xy;
+                    let rect_min = uniforms.rect_data.xy;
+                    let rect_size = uniforms.rect_data.zw;
+                    let aspect = rect_size.x / rect_size.y;
+                    var total_color = vec3<f32>(0.0);
+                    let n: f32 = {n}.0;
+                    for (var iy: i32 = 0; iy < {n}; iy = iy + 1) {{
+                        for (var ix: i32 = 0; ix < {n}; ix = ix + 1) {{
+                            let offset = (vec2<f32>(f32(ix), f32(iy)) + 0.5) / n - 0.5;
+                            let uv = (((pixel_pos + offset - rect_min) / rect_size) * 2.0 - 1.0) * vec2<f32>(aspect, -1.0);
+                            total_color += render_scene(uv);
+                        }}
+                    }}
+                    return vec4<f32>(total_color / (n * n), 1.0);
+                }}",
+                n = n
+            )
+        };
+
         format!(
             "struct SdfResult {{
                 dist: f32,
@@ -17,8 +56,11 @@ impl WgslGenerator {
 
             fn map(p_in: vec3<f32>) -> SdfResult {{
                 return {};
-            }}",
-            expression
+            }}
+            
+            {}
+            ",
+            map_expr, fs_main
         )
     }
 

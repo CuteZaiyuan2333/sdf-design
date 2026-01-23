@@ -84,7 +84,7 @@ fn rotate_z(p: vec3<f32>, angle: f32) -> vec3<f32> {
     return vec3<f32>(c * p.x - s * p.y, s * p.x + c * p.y, p.z);
 }
 
-// {{MAP_FUNCTION_HERE}}
+// {{GENERATED_CODE_HERE}}
 
 fn calc_normal(p: vec3<f32>) -> vec3<f32> {
     let e = vec2<f32>(0.0005, 0.0);
@@ -170,26 +170,4 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
     let x = f32(i32(idx) & 1) * 4.0 - 1.0;
     let y = f32(i32(idx) & 2) * 2.0 - 1.0;
     return VertexOutput(vec4<f32>(x, y, 0.0, 1.0));
-}
-
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let pixel_pos = in.clip_position.xy;
-    let rect_min = uniforms.rect_data.xy;
-    let rect_size = uniforms.rect_data.zw;
-    let aspect = rect_size.x / rect_size.y;
-    
-    var total_color = vec3<f32>(0.0);
-    
-    // Global 8x8 SSAA (64 samples per pixel)
-    // Grid offset goes from -0.4375 to 0.4375
-    for (var iy: i32 = 0; iy < 8; iy = iy + 1) {
-        for (var ix: i32 = 0; ix < 8; ix = ix + 1) {
-            let offset = (vec2<f32>(f32(ix), f32(iy)) + 0.5) / 8.0 - 0.5;
-            let uv = (((pixel_pos + offset - rect_min) / rect_size) * 2.0 - 1.0) * vec2<f32>(aspect, -1.0);
-            total_color += render_scene(uv);
-        }
-    }
-
-    return vec4<f32>(total_color / 64.0, 1.0);
 }

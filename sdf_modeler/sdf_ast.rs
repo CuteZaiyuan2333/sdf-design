@@ -1,5 +1,37 @@
 use rhai::{Engine, CustomType, TypeBuilder};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SsaaLevel {
+    Off,
+    Ssaa2x2,
+    Ssaa4x4,
+    Ssaa8x8,
+}
+
+impl SsaaLevel {
+    pub fn to_u32(self) -> u32 {
+        match self {
+            Self::Off => 1,
+            Self::Ssaa2x2 => 2,
+            Self::Ssaa4x4 => 4,
+            Self::Ssaa8x8 => 8,
+        }
+    }
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct SdfSettings {
+    pub ssaa_level: SsaaLevel,
+}
+
+impl Default for SdfSettings {
+    fn default() -> Self {
+        Self {
+            ssaa_level: SsaaLevel::Ssaa2x2,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum SdfOp {
     Sphere { radius: f32 },

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::path::PathBuf;
 use std::fs;
 use crate::{Plugin, AppCommand, TabInstance, Tab};
+use parking_lot::RwLock;
 
 // Import internal modules
 mod sdf_ast;
@@ -10,7 +11,7 @@ mod sdf_widget;
 mod wgsl_gen;
 
 use sdf_widget::{sdf_view, CameraUniformData};
-use sdf_ast::{SdfNode, register_rhai_types};
+use sdf_ast::{SdfNode, register_rhai_types, SdfSettings, SsaaLevel};
 use wgsl_gen::WgslGenerator;
 use glam::Vec3;
 use rhai::{Engine, Scope};
@@ -71,47 +72,74 @@ impl Camera {
 
 #[derive(Clone)]
 pub struct SdfTab {
-    sdf_resources: Arc<parking_lot::RwLock<Option<Arc<sdf_widget::SdfRenderResources>>>>,
+    // 3D Resources
+    sdf_resources: Arc<RwLock<Option<Arc<sdf_widget::SdfRenderResources>>>>,
     camera: Arc<std::sync::Mutex<Camera>>,
     current_shader: String,
+    
+    // Logic Resources
     rhai_engine: Arc<Engine>,
+    
+    // Project State
     project_path: Option<PathBuf>,
     compiler_error: Option<String>,
+    
+    // Settings Reference
+    settings: Arc<RwLock<SdfSettings>>,
+    last_applied_ssaa: SsaaLevel,
 }
 
 impl std::fmt::Debug for SdfTab {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SdfTab").field("project_path", &self.project_path).finish()
+        f.debug_struct("SdfTab")
+         .field("project_path", &self.project_path)
+         .finish()
     }
 }
 
 impl SdfTab {
-    fn new() -> Self {
+    fn new(settings: Arc<RwLock<SdfSettings>>) -> Self {
         let mut engine = Engine::new();
         register_rhai_types(&mut engine);
+        
+        let initial_ssaa = settings.read().ssaa_level;
 
         Self {
-            sdf_resources: Arc::new(parking_lot::RwLock::new(None)),
+            sdf_resources: Arc::new(RwLock::new(None)),
             camera: Arc::new(std::sync::Mutex::new(Camera::default())),
             current_shader: String::new(),
+            
             rhai_engine: Arc::new(engine),
+            
             project_path: None,
             compiler_error: None,
+            
+            settings,
+            last_applied_ssaa: initial_ssaa,
         }
     }
 
     fn compile_project(&mut self) -> Result<String, String> {
         let path = self.project_path.as_ref().ok_or("No project opened")?;
         let entry_file = path.join("main.rhai");
-        let code = fs::read_to_string(&entry_file).map_err(|e| format!("Failed to read main.rhai: {}", e))?;
+        
+        let code = fs::read_to_string(&entry_file)
+            .map_err(|e| format!("Failed to read main.rhai: {}", e))?;
 
         let mut scope = Scope::new();
-        let result = self.rhai_engine.eval_with_scope::<SdfNode>(&mut scope, &code).map_err(|e| format!("Rhai Error: {}", e))?;
+        let result = self.rhai_engine.eval_with_scope::<SdfNode>(&mut scope, &code)
+            .map_err(|e| format!("Rhai Error: {}", e))?;
+
+        let ssaa_level = self.settings.read().ssaa_level;
+        self.last_applied_ssaa = ssaa_level;
 
         let mut generator = WgslGenerator::new();
-        let map_fn_body = generator.generate(&result);
+        let generated_code = generator.generate(&result, ssaa_level);
+
         let template = include_str!("shader_template.wgsl");
-        Ok(template.replace("// {{MAP_FUNCTION_HERE}}", &map_fn_body))
+        let full_wgsl = template.replace("// {{GENERATED_CODE_HERE}}", &generated_code);
+
+        Ok(full_wgsl)
     }
 }
 
@@ -126,6 +154,20 @@ impl TabInstance for SdfTab {
     }
 
     fn ui(&mut self, ui: &mut Ui, control: &mut Vec<AppCommand>) {
+        // --- Detect Settings Change ---
+        let current_ssaa = self.settings.read().ssaa_level;
+        if current_ssaa != self.last_applied_ssaa && self.project_path.is_some() {
+            // Re-compile automatically when settings change
+            match self.compile_project() {
+                Ok(wgsl) => {
+                    self.current_shader = wgsl;
+                    *self.sdf_resources.write() = None;
+                }
+                Err(_) => {}
+            }
+        }
+
+        // --- Top Bar: Project Controls ---
         egui::TopBottomPanel::top("sdf_top_bar").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("📂 Open Project...").clicked() {
@@ -136,11 +178,17 @@ impl TabInstance for SdfTab {
                                 self.compiler_error = None;
                                 self.current_shader = wgsl;
                                 *self.sdf_resources.write() = None;
-                                control.push(AppCommand::Notify { message: "Project opened & compiled".into(), level: crate::NotificationLevel::Success });
+                                control.push(AppCommand::Notify { 
+                                    message: "Project opened & compiled".into(), 
+                                    level: crate::NotificationLevel::Success 
+                                });
                             }
                             Err(e) => {
                                 self.compiler_error = Some(e);
-                                control.push(AppCommand::Notify { message: "Compilation failed".into(), level: crate::NotificationLevel::Warning });
+                                control.push(AppCommand::Notify { 
+                                    message: "Project opened but compilation failed".into(), 
+                                    level: crate::NotificationLevel::Warning 
+                                });
                             }
                         }
                     }
@@ -149,25 +197,34 @@ impl TabInstance for SdfTab {
                 if let Some(path) = &self.project_path {
                     ui.label(path.to_string_lossy().to_string());
                     ui.separator();
-                    if ui.button("▶ Compile & Run").clicked() {
+                    
+                    let run_btn = ui.button("▶ Compile & Run");
+                    if run_btn.clicked() {
                         match self.compile_project() {
                             Ok(wgsl) => {
                                 self.compiler_error = None;
                                 self.current_shader = wgsl;
                                 *self.sdf_resources.write() = None;
-                                control.push(AppCommand::Notify { message: "Project compiled".into(), level: crate::NotificationLevel::Success });
+                                control.push(AppCommand::Notify { 
+                                    message: "Project compiled".into(), 
+                                    level: crate::NotificationLevel::Success 
+                                });
                             }
-                            Err(e) => { self.compiler_error = Some(e); }
+                            Err(e) => {
+                                self.compiler_error = Some(e);
+                            }
                         }
                     }
                 }
             });
+            
             if let Some(err) = &self.compiler_error {
                 ui.separator();
                 ui.colored_label(egui::Color32::RED, err);
             }
         });
 
+        // --- Central: 3D Viewport ---
         egui::CentralPanel::default().show_inside(ui, |ui| {
              ui.ctx().request_repaint();
 
@@ -183,7 +240,9 @@ impl TabInstance for SdfTab {
                 camera.pitch.sin(),
                 camera.yaw.sin() * camera.pitch.cos()
             ).normalize();
-            let right = front.cross(Vec3::Y).normalize();
+
+            let global_up = Vec3::new(0.0, 1.0, 0.0);
+            let right = front.cross(global_up).normalize();
             let up = right.cross(front).normalize();
 
             let cam_data = CameraUniformData {
@@ -198,9 +257,9 @@ impl TabInstance for SdfTab {
             
             let rect = response.rect;
             ui.put(
-                egui::Rect::from_min_size(rect.left_bottom() + egui::vec2(10.0, -30.0), egui::vec2(250.0, 20.0)),
+                egui::Rect::from_min_size(rect.left_bottom() + egui::vec2(10.0, -30.0), egui::vec2(300.0, 20.0)),
                 |ui: &mut Ui| {
-                    ui.colored_label(egui::Color32::WHITE, format!("Cam: [{:.1}, {:.1}, {:.1}] | 8x8 SSAA", camera.pos.x, camera.pos.y, camera.pos.z))
+                    ui.colored_label(egui::Color32::WHITE, format!("Cam: [{:.1}, {:.1}, {:.1}] | SSAA: {:?}", camera.pos.x, camera.pos.y, camera.pos.z, self.last_applied_ssaa))
                 }
             );
         });
@@ -211,9 +270,11 @@ impl TabInstance for SdfTab {
     }
 }
 
-// --- Plugin Entry ---
+// --- Plugin Implementation ---
 
-pub struct SdfPlugin;
+pub struct SdfPlugin {
+    settings: Arc<RwLock<SdfSettings>>,
+}
 
 impl Plugin for SdfPlugin {
     fn name(&self) -> &str {
@@ -222,11 +283,34 @@ impl Plugin for SdfPlugin {
 
     fn on_menu_bar(&mut self, ui: &mut Ui, control: &mut Vec<AppCommand>) {
         if ui.button("💠 SDF Modeler").clicked() {
-            control.push(AppCommand::OpenTab(Tab::new(Box::new(SdfTab::new()))));
+            control.push(AppCommand::OpenTab(Tab::new(Box::new(SdfTab::new(self.settings.clone())))));
         }
+    }
+
+    fn on_settings_ui(&mut self, ui: &mut Ui) {
+        ui.heading("SDF Modeler Settings");
+        ui.separator();
+        
+        let mut settings = self.settings.write();
+        ui.horizontal(|ui| {
+            ui.label("Anti-Aliasing (SSAA):");
+            egui::ComboBox::from_id_salt("ssaa_level")
+                .selected_text(format!("{:?}", settings.ssaa_level))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut settings.ssaa_level, SsaaLevel::Off, "Off");
+                    ui.selectable_value(&mut settings.ssaa_level, SsaaLevel::Ssaa2x2, "2x2 (4 samples)");
+                    ui.selectable_value(&mut settings.ssaa_level, SsaaLevel::Ssaa4x4, "4x4 (16 samples)");
+                    ui.selectable_value(&mut settings.ssaa_level, SsaaLevel::Ssaa8x8, "8x8 (64 samples)");
+                });
+        });
+        
+        ui.add_space(10.0);
+        ui.weak("Note: Higher SSAA levels significantly increase GPU load.");
     }
 }
 
 pub fn create() -> SdfPlugin {
-    SdfPlugin
+    SdfPlugin {
+        settings: Arc::new(RwLock::new(SdfSettings::default())),
+    }
 }
